@@ -21,6 +21,66 @@ public class GangMember : PedExt, IWeaponIssuable
         PedBrain = new GangBrain(this, Settings, world, weapons);
         Voice = new GangVoice(this, Settings);
     }
+    public void HandleFleeBehavior()
+    {
+        if (GangMember.IsHitSquad && GangMember.RemainingAmmo <= 0)
+        {
+            GangMember.FleeToVehicle();
+        }
+    }
+    public class GangMember
+{
+    public bool IsHitSquad { get; set; } // Flag to identify if the member is part of the hitsquad
+    public int RemainingAmmo { get; set; } = 11; // Starting ammo
+    public bool IsInVehicle { get; set; }
+    public Vehicle CurrentVehicle { get; set; }
+    public Ped Pedestrian { get; set; } // Assuming 'Ped' is the character entity
+    public WeaponInventory WeaponInventory { get; set; }
+
+    public void FireWeapon()
+    {
+        // Handle shooting logic here
+        if (RemainingAmmo > 0)
+        {
+            RemainingAmmo--;
+        }
+
+        if (RemainingAmmo <= 0)
+        {
+            // If ammo is depleted, trigger fleeing behavior
+            TriggerFleeBehavior();
+        }
+    }
+
+    private void TriggerFleeBehavior()
+    {
+        if (IsHitSquad)
+        {
+            FleeToVehicle();
+        }
+    }
+
+    public void FleeToVehicle()
+    {
+        // Check if the vehicle is available and if the pedestrian (gang member) is alive
+        if (Pedestrian.Exists() && Pedestrian.IsAlive && CurrentVehicle != null && CurrentVehicle.Exists())
+        {
+            // If the gang member is already in the vehicle
+            if (Pedestrian.IsInVehicle(CurrentVehicle, false))
+            {
+                CurrentVehicle.Task.CruiseWithVehicle(30f); // Fleeing logic: vehicle cruises away
+            }
+            else
+            {
+                // If not in the vehicle, enter the vehicle
+                Pedestrian.Task.EnterVehicle(CurrentVehicle, -1);
+            }
+        }
+    }
+}
+    
+    }
+
     public List<ReputationReport> WitnessedReports { get; private set; } = new List<ReputationReport>();
     public ReputationReport ReputationReport { get; private set; }
     public override int ShootRate { get; set; } = 400;
@@ -41,6 +101,7 @@ public class GangMember : PedExt, IWeaponIssuable
     public IssuableWeapon GetRandomMeleeWeapon(IWeapons weapons) => Gang.GetRandomMeleeWeapon(weapons);
     public IssuableWeapon GetRandomWeapon(bool v, IWeapons weapons) => Gang.GetRandomWeapon(v, weapons);
     public Gang Gang { get; set; } = new Gang();
+    public Vehicle Vehicle { get; set; }
     public override Color BlipColor => Gang != null ? Gang.Color : base.BlipColor;
     public override float BlipSize => 0.3f;
     public bool HasTaser { get; set; } = false;
@@ -62,6 +123,7 @@ public class GangMember : PedExt, IWeaponIssuable
         {
             return;
         }
+
         if (Pedestrian.IsAlive)
         {
             if (NeedsFullUpdate)
@@ -70,25 +132,56 @@ public class GangMember : PedExt, IWeaponIssuable
                 UpdatePositionData();
                 PlayerPerception.Update(perceptable, placeLastSeen);
                 UpdateVehicleState();
-                if (!IsUnconscious && PlayerPerception.DistanceToTarget <= 200f)//was 150 only care in a bubble around the player, nothing to do with the player tho
+
+                if (!IsUnconscious && PlayerPerception.DistanceToTarget <= 200f) // Maintain bubble around the player
                 {
                     if (!PlayerPerception.RanSightThisUpdate && !Settings.SettingsManager.PerformanceSettings.EnableIncreasedUpdateMode)
                     {
-                        GameFiber.Yield();//TR TEST 28
+                        GameFiber.Yield(); // Yield control for performance
                     }
-                    PedViolations.Update(policeRespondable);//possible yield in here!, REMOVED FOR NOW
+
+                    // Check ammo and decide on behavior
+                    if (IsHitSquad && WeaponInventory.GetCurrentWeaponAmmo && RemainingAmmo() <= 0)
+                    {
+                        FleeToVehicleAndEscape(); // Custom method for fleeing
+                        return; // Skip further updates once fleeing starts
+                    }
+
+                    PedViolations.Update(policeRespondable); // Check violations
                     PedPerception.Update();
                     if (policeRespondable.CanBustPeds)
                     {
                         CheckPlayerBusted();
                     }
+
                 }
+
                 GameTimeLastUpdated = Game.GameTime;
             }
         }
+
         ReputationReport.Update(perceptable, world, Settings);
-        CurrentHealthState.Update(policeRespondable);//has a yield if they get damaged, seems ok       
+        CurrentHealthState.Update(policeRespondable);
     }
+
+    // Method to handle fleeing behavior
+    public void FleeToVehicle()
+    {
+        if (!Pedestrian.Exists() || !Pedestrian.IsAlive || Gang.Vehicle == null || !Gang.Vehicle.Exists())
+        {
+            return; // Ensure the hitsquad member and their vehicle exist
+        }
+
+        if (Pedestrian.IsInVehicle(Gang.Vehicle, false))
+        {
+            Gang.Vehicle.Task.CruiseWithVehicle(30f); // Escape logic when already in the vehicle
+        }
+        else
+        {
+            Pedestrian.Task.EnterVehicle(Gang.Vehicle, -1); // Enter the vehicle if not already in
+        }
+    }
+
 
     public void UpdateSpeech(IPoliceRespondable currentPlayer)
     {
@@ -151,8 +244,8 @@ public class GangMember : PedExt, IWeaponIssuable
         if (IsHitSquad || IsBackupSquad || IsGeneralBackup)
         {
             WillFight = true;
-            WillFightPolice = true;
-            WillAlwaysFightPolice = true;
+            WillFightPolice = false;
+            WillAlwaysFightPolice = false;
         }
         if (RandomItems.RandomPercent(Gang.DrugDealerPercentage))
         {
@@ -178,6 +271,12 @@ public class GangMember : PedExt, IWeaponIssuable
             NativeFunction.Natives.SET_PED_SEEING_RANGE(Pedestrian, Settings.SettingsManager.CivilianSettings.SightDistance);
         }
     }
+    public void IssueWeapons(...)
+    {
+        // existing weapon issuance code
+        GangMember.RemainingAmmo = 11; // Initialize ammo cap
+    }
+
     public override void OnItemPurchased(ILocationInteractable player, ModItem modItem, int numberPurchased, int moneySpent)
     {
         player.RelationshipManager.GangRelationships.ChangeReputation(Gang, moneySpent, true);
